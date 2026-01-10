@@ -1,3 +1,5 @@
+mod error;
+
 use eframe::egui;
 
 fn main() -> eframe::Result<()> {
