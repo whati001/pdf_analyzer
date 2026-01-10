@@ -1,5 +1,6 @@
 mod config;
 mod error;
+mod pdf;
 
 use eframe::egui;
 
