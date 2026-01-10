@@ -1,6 +1,7 @@
 mod analyzer;
 mod config;
 mod error;
+mod output;
 mod pdf;
 
 use eframe::egui;
