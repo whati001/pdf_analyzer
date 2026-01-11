@@ -19,7 +19,19 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "PDF Analyzer",
         options,
-        Box::new(|_cc| Ok(Box::new(App::default()))),
+        Box::new(|cc| {
+            // Set up larger fonts
+            let mut style = (*cc.egui_ctx.style()).clone();
+
+            // Increase all font sizes by ~40%
+            for (_text_style, font_id) in style.text_styles.iter_mut() {
+                font_id.size *= 1.4;
+            }
+
+            cc.egui_ctx.set_style(style);
+
+            Ok(Box::new(App::default()))
+        }),
     )
 }
 
@@ -90,7 +102,7 @@ impl eframe::App for App {
         // Main content
         egui::CentralPanel::default().show(ctx, |ui| {
             match self.current_tab {
-                app::AppTab::PdfList => self.show_pdf_list_tab(ui),
+                app::AppTab::PdfList => self.show_pdf_list_tab(ui, ctx),
                 app::AppTab::Results => self.show_results_tab(ui, ctx),
             }
         });
@@ -98,7 +110,7 @@ impl eframe::App for App {
 }
 
 impl App {
-    fn show_pdf_list_tab(&mut self, ui: &mut egui::Ui) {
+    fn show_pdf_list_tab(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal(|ui| {
             if ui.button("+ Add PDFs").clicked() {
                 if let Some(paths) = rfd::FileDialog::new()
@@ -145,10 +157,37 @@ impl App {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 let mut to_remove = None;
 
-                for (idx, loaded_pdf) in self.pdfs.iter().enumerate() {
+                for (idx, loaded_pdf) in self.pdfs.iter_mut().enumerate() {
+                    // Lazily create texture from thumbnail if needed
+                    if loaded_pdf.texture.is_none() {
+                        if let Some(ref thumbnail) = loaded_pdf.file.thumbnail {
+                            let size = [thumbnail.width() as usize, thumbnail.height() as usize];
+                            let pixels = thumbnail.as_flat_samples();
+                            let color_image = egui::ColorImage::from_rgba_unmultiplied(size, pixels.as_slice());
+                            let texture = ctx.load_texture(
+                                format!("pdf_thumb_{}", idx),
+                                color_image,
+                                egui::TextureOptions::LINEAR,
+                            );
+                            loaded_pdf.texture = Some(texture);
+                        }
+                    }
+
                     ui.horizontal(|ui| {
-                        ui.label(format!("📄 {}", loaded_pdf.file.filename));
-                        ui.weak(format!("({} pages)", loaded_pdf.file.page_count));
+                        // Display thumbnail if available
+                        if let Some(ref texture) = loaded_pdf.texture {
+                            let size = texture.size_vec2();
+                            let scaled_height = 60.0;
+                            let scale = scaled_height / size.y;
+                            let scaled_size = egui::vec2(size.x * scale, scaled_height);
+                            ui.image((texture.id(), scaled_size));
+                            ui.add_space(8.0);
+                        }
+
+                        ui.vertical(|ui| {
+                            ui.label(&loaded_pdf.file.filename);
+                            ui.weak(format!("{} pages", loaded_pdf.file.page_count));
+                        });
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("🗑").clicked() {
@@ -156,7 +195,7 @@ impl App {
                             }
                         });
                     });
-                    ui.add_space(4.0);
+                    ui.add_space(8.0);
                 }
 
                 if let Some(idx) = to_remove {

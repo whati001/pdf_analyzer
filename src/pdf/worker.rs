@@ -89,18 +89,22 @@ impl PdfWorker {
         Ok(Pdfium::new(bindings))
     }
 
-    fn analyze_pdf(pdfium: &Pdfium, registry: &AnalyzerRegistry, path: &PathBuf) -> Result<SinglePdfAnalysis> {
+    fn analyze_pdf(
+        pdfium: &Pdfium,
+        registry: &AnalyzerRegistry,
+        path: &PathBuf,
+    ) -> Result<SinglePdfAnalysis> {
         let filename = path
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "Unknown".to_string());
 
-        let document = pdfium.load_pdf_from_file(path, None).map_err(|e| {
-            AppError::PdfLoad {
+        let document = pdfium
+            .load_pdf_from_file(path, None)
+            .map_err(|e| AppError::PdfLoad {
                 path: path.display().to_string(),
                 reason: e.to_string(),
-            }
-        })?;
+            })?;
 
         let mut results = Vec::new();
         let mut errors = Vec::new();
@@ -131,26 +135,6 @@ impl PdfWorker {
 
         self.request_tx
             .send(PdfRequest::LoadPdf {
-                path,
-                response: response_tx,
-            })
-            .map_err(|_| AppError::PdfLoad {
-                path: "worker".to_string(),
-                reason: "Worker thread not responding".to_string(),
-            })?;
-
-        response_rx.recv().map_err(|_| AppError::PdfLoad {
-            path: "worker".to_string(),
-            reason: "Worker thread died".to_string(),
-        })?
-    }
-
-    /// Analyze a PDF file (blocking call)
-    pub fn analyze_pdf_blocking(&self, path: PathBuf) -> Result<SinglePdfAnalysis> {
-        let (response_tx, response_rx) = oneshot::channel();
-
-        self.request_tx
-            .send(PdfRequest::AnalyzePdf {
                 path,
                 response: response_tx,
             })
