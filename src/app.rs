@@ -8,7 +8,7 @@ use crate::analyzer::{AnalyzerRegistry, PdfAnalysisResult};
 use crate::config::Config;
 use crate::error::Result;
 use crate::output::{OutputData, OutputRegistry};
-use crate::pdf::{PdfFile, PdfProcessor};
+use crate::pdf::{PdfFile, PdfRequest, PdfWorker};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppTab {
@@ -58,8 +58,8 @@ pub struct App {
     // Communication channels
     pub analysis_receiver: Option<Receiver<AnalysisMessage>>,
 
-    // PDF processor (lazy initialized)
-    pdf_processor: Option<PdfProcessor>,
+    // PDF worker thread
+    worker: PdfWorker,
 }
 
 impl Default for App {
@@ -70,6 +70,8 @@ impl Default for App {
 
         analyzer_registry.apply_config(&config);
         output_registry.apply_config(&config);
+
+        let worker = PdfWorker::spawn().expect("Failed to initialize PDF worker");
 
         Self {
             state: AppState::Ready,
@@ -84,22 +86,14 @@ impl Default for App {
             show_settings: false,
             errors: Vec::new(),
             analysis_receiver: None,
-            pdf_processor: None,
+            worker,
         }
     }
 }
 
 impl App {
-    pub fn get_pdf_processor(&mut self) -> Result<&PdfProcessor> {
-        if self.pdf_processor.is_none() {
-            self.pdf_processor = Some(PdfProcessor::new()?);
-        }
-        Ok(self.pdf_processor.as_ref().unwrap())
-    }
-
     pub fn add_pdf(&mut self, path: PathBuf) -> Result<()> {
-        let processor = self.get_pdf_processor()?;
-        let file = processor.load_pdf(path)?;
+        let file = self.worker.load_pdf(path)?;
         self.pdfs.push(LoadedPdf {
             file,
             texture: None,
@@ -128,8 +122,8 @@ impl App {
             return;
         }
 
-        let (tx, rx) = mpsc::channel();
-        self.analysis_receiver = Some(rx);
+        let (progress_tx, progress_rx) = mpsc::channel();
+        self.analysis_receiver = Some(progress_rx);
         self.state = AppState::Analyzing;
         self.progress = Some(AnalysisProgress {
             current_file: String::new(),
@@ -139,10 +133,10 @@ impl App {
         });
 
         let paths: Vec<PathBuf> = self.pdfs.iter().map(|p| p.file.path.clone()).collect();
-        let analyzer_count = self.analyzer_registry.analyzers().len();
+        let worker_tx = self.worker.sender();
 
         thread::spawn(move || {
-            run_analysis(paths, analyzer_count, tx);
+            run_analysis(paths, worker_tx, progress_tx);
         });
     }
 
@@ -183,16 +177,11 @@ impl App {
     }
 }
 
-fn run_analysis(paths: Vec<PathBuf>, _analyzer_count: usize, tx: Sender<AnalysisMessage>) {
-    let processor = match PdfProcessor::new() {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = tx.send(AnalysisMessage::Error(e.to_string()));
-            return;
-        }
-    };
-
-    let registry = AnalyzerRegistry::default();
+fn run_analysis(
+    paths: Vec<PathBuf>,
+    worker_tx: Sender<PdfRequest>,
+    progress_tx: Sender<AnalysisMessage>,
+) {
     let mut results = Vec::new();
     let total_files = paths.len();
 
@@ -202,41 +191,52 @@ fn run_analysis(paths: Vec<PathBuf>, _analyzer_count: usize, tx: Sender<Analysis
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "Unknown".to_string());
 
-        let document = match processor.pdfium().load_pdf_from_file(path, None) {
-            Ok(doc) => doc,
-            Err(e) => {
-                let _ = tx.send(AnalysisMessage::Error(format!(
-                    "Failed to load {}: {}",
-                    filename, e
-                )));
-                continue;
-            }
-        };
+        // Send progress update
+        let _ = progress_tx.send(AnalysisMessage::Progress(AnalysisProgress {
+            current_file: filename.clone(),
+            current_analyzer: "Analyzing...".to_string(),
+            files_done: file_idx,
+            files_total: total_files,
+        }));
 
-        let mut pdf_results = Vec::new();
-        let mut pdf_errors = Vec::new();
-
-        for analyzer in registry.analyzers() {
-            let _ = tx.send(AnalysisMessage::Progress(AnalysisProgress {
-                current_file: filename.clone(),
-                current_analyzer: analyzer.name().to_string(),
-                files_done: file_idx,
-                files_total: total_files,
-            }));
-
-            match analyzer.analyze(&document, path) {
-                Ok(result) => pdf_results.push(result),
-                Err(e) => pdf_errors.push(format!("{}: {}", analyzer.name(), e)),
-            }
+        // Request analysis from the worker thread
+        let (response_tx, response_rx) = oneshot::channel();
+        if worker_tx
+            .send(PdfRequest::AnalyzePdf {
+                path: path.clone(),
+                response: response_tx,
+            })
+            .is_err()
+        {
+            let _ = progress_tx.send(AnalysisMessage::Error(
+                "Worker thread not responding".to_string(),
+            ));
+            continue;
         }
 
-        results.push(PdfAnalysisResult {
-            filename,
-            path: path.display().to_string(),
-            results: pdf_results,
-            errors: pdf_errors,
-        });
+        match response_rx.recv() {
+            Ok(Ok(analysis)) => {
+                results.push(PdfAnalysisResult {
+                    filename: analysis.filename,
+                    path: analysis.path,
+                    results: analysis.results,
+                    errors: analysis.errors,
+                });
+            }
+            Ok(Err(e)) => {
+                let _ = progress_tx.send(AnalysisMessage::Error(format!(
+                    "Failed to analyze {}: {}",
+                    filename, e
+                )));
+            }
+            Err(_) => {
+                let _ = progress_tx.send(AnalysisMessage::Error(format!(
+                    "Worker died while analyzing {}",
+                    filename
+                )));
+            }
+        }
     }
 
-    let _ = tx.send(AnalysisMessage::Complete(results));
+    let _ = progress_tx.send(AnalysisMessage::Complete(results));
 }

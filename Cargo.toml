@@ -16,6 +16,7 @@ toml = "0.8"
 dirs = "5.0"
 thiserror = "2.0"
 image = "0.25"
+oneshot = "0.1"
 
 [profile.release]
 opt-level = 3

@@ -1,10 +1,13 @@
+pub mod worker;
+
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use image::RgbaImage;
 use pdfium_render::prelude::*;
 
 use crate::error::{AppError, Result};
+
+pub use worker::{PdfRequest, PdfWorker};
 
 pub struct PdfFile {
     pub path: PathBuf,
@@ -60,34 +63,5 @@ impl PdfFile {
         })?;
 
         Ok(bitmap.as_image().to_rgba8())
-    }
-}
-
-pub struct PdfProcessor {
-    pdfium: Arc<Pdfium>,
-}
-
-impl PdfProcessor {
-    pub fn new() -> Result<Self> {
-        let pdfium = Pdfium::new(
-            Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./"))
-                .or_else(|_| Pdfium::bind_to_system_library())
-                .map_err(|e| AppError::PdfLoad {
-                    path: "pdfium library".to_string(),
-                    reason: e.to_string(),
-                })?,
-        );
-
-        Ok(Self {
-            pdfium: Arc::new(pdfium),
-        })
-    }
-
-    pub fn load_pdf(&self, path: PathBuf) -> Result<PdfFile> {
-        PdfFile::load(path, &self.pdfium)
-    }
-
-    pub fn pdfium(&self) -> &Pdfium {
-        &self.pdfium
     }
 }
