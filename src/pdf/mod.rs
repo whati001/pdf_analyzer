@@ -1,13 +1,14 @@
-pub mod worker;
+pub mod service;
+// pub mod worker;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use image::RgbaImage;
 use pdfium_render::prelude::*;
 
 use crate::error::{AppError, Result};
 
-pub use worker::{PdfRequest, PdfWorker};
+// pub use worker::{PdfRequest, PdfWorker};
 
 pub struct PdfFile {
     pub path: PathBuf,
@@ -23,12 +24,12 @@ impl PdfFile {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "Unknown".to_string());
 
-        let document = pdfium.load_pdf_from_file(&path, None).map_err(|e| {
-            AppError::PdfLoad {
+        let document = pdfium
+            .load_pdf_from_file(&path, None)
+            .map_err(|e| AppError::PdfLoad {
                 path: path.display().to_string(),
                 reason: e.to_string(),
-            }
-        })?;
+            })?;
 
         let page_count = document.pages().len() as usize;
 
@@ -44,23 +45,24 @@ impl PdfFile {
     }
 
     fn generate_thumbnail(document: &PdfDocument, page_index: usize) -> Result<RgbaImage> {
-        let page = document.pages().get(page_index as u16).map_err(|e| {
-            AppError::RenderError {
+        let page = document
+            .pages()
+            .get(page_index as u16)
+            .map_err(|e| AppError::RenderError {
                 page: page_index,
                 reason: e.to_string(),
-            }
-        })?;
+            })?;
 
         let render_config = PdfRenderConfig::new()
             .set_target_width(150)
             .set_maximum_height(200);
 
-        let bitmap = page.render_with_config(&render_config).map_err(|e| {
-            AppError::RenderError {
-                page: page_index,
-                reason: e.to_string(),
-            }
-        })?;
+        let bitmap =
+            page.render_with_config(&render_config)
+                .map_err(|e| AppError::RenderError {
+                    page: page_index,
+                    reason: e.to_string(),
+                })?;
 
         Ok(bitmap.as_image().to_rgba8())
     }
