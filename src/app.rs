@@ -2,13 +2,15 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
+use crossbeam_channel as chan;
 use egui::TextureHandle;
 
 use crate::analyzer::{AnalyzerRegistry, PdfAnalysisResult};
 use crate::config::Config;
 use crate::error::Result;
 use crate::output::{OutputData, OutputRegistry};
-use crate::pdf::{PdfFile, PdfRequest, PdfWorker};
+use crate::pdf::service::{PdfSerivceRequest, PdfiumService};
+use crate::pdf::PdfFile;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppTab {
@@ -58,8 +60,8 @@ pub struct App {
     // Communication channels
     pub analysis_receiver: Option<Receiver<AnalysisMessage>>,
 
-    // PDF worker thread
-    worker: PdfWorker,
+    // pdf service
+    pub pdf_service: crate::pdf::service::PdfiumService,
 }
 
 impl Default for App {
@@ -70,8 +72,6 @@ impl Default for App {
 
         analyzer_registry.apply_config(&config);
         output_registry.apply_config(&config);
-
-        let worker = PdfWorker::spawn().expect("Failed to initialize PDF worker");
 
         Self {
             state: AppState::Ready,
@@ -86,14 +86,14 @@ impl Default for App {
             show_settings: false,
             errors: Vec::new(),
             analysis_receiver: None,
-            worker,
+            pdf_service: crate::pdf::service::PdfiumWorker::service().unwrap(),
         }
     }
 }
 
 impl App {
     pub fn add_pdf(&mut self, path: PathBuf) -> Result<()> {
-        let file = self.worker.load_pdf(path)?;
+        let file = self.pdf_service.load_pdf(path)?;
         self.pdfs.push(LoadedPdf {
             file,
             texture: None,
@@ -133,10 +133,10 @@ impl App {
         });
 
         let paths: Vec<PathBuf> = self.pdfs.iter().map(|p| p.file.path.clone()).collect();
-        let worker_tx = self.worker.sender();
+        let pdf_service = self.pdf_service.clone();
 
         thread::spawn(move || {
-            run_analysis(paths, worker_tx, progress_tx);
+            run_analysis(paths, pdf_service, progress_tx);
         });
     }
 
@@ -151,7 +151,8 @@ impl App {
                     }
                     AnalysisMessage::Complete(results) => {
                         self.analysis_results = results;
-                        self.output_data = self.output_registry.generate_all(&self.analysis_results);
+                        self.output_data =
+                            self.output_registry.generate_all(&self.analysis_results);
                         self.state = AppState::Results;
                         self.current_tab = AppTab::Results;
                         completed = true;
@@ -179,7 +180,7 @@ impl App {
 
 fn run_analysis(
     paths: Vec<PathBuf>,
-    worker_tx: Sender<PdfRequest>,
+    pdf_service: PdfiumService,
     progress_tx: Sender<AnalysisMessage>,
 ) {
     let mut results = Vec::new();
@@ -200,22 +201,8 @@ fn run_analysis(
         }));
 
         // Request analysis from the worker thread
-        let (response_tx, response_rx) = oneshot::channel();
-        if worker_tx
-            .send(PdfRequest::AnalyzePdf {
-                path: path.clone(),
-                response: response_tx,
-            })
-            .is_err()
-        {
-            let _ = progress_tx.send(AnalysisMessage::Error(
-                "Worker thread not responding".to_string(),
-            ));
-            continue;
-        }
-
-        match response_rx.recv() {
-            Ok(Ok(analysis)) => {
+        match pdf_service.analyze_pdf(path.to_path_buf()) {
+            Ok(analysis) => {
                 results.push(PdfAnalysisResult {
                     filename: analysis.filename,
                     path: analysis.path,
@@ -223,17 +210,14 @@ fn run_analysis(
                     errors: analysis.errors,
                 });
             }
-            Ok(Err(e)) => {
-                let _ = progress_tx.send(AnalysisMessage::Error(format!(
-                    "Failed to analyze {}: {}",
-                    filename, e
-                )));
-            }
-            Err(_) => {
-                let _ = progress_tx.send(AnalysisMessage::Error(format!(
-                    "Worker died while analyzing {}",
-                    filename
-                )));
+            Err(err) => {
+                let _ = progress_tx
+                    .send(AnalysisMessage::Error(format!(
+                        "Failed to analyze {}: {}",
+                        filename, err
+                    )))
+                    .unwrap();
+                continue;
             }
         }
     }

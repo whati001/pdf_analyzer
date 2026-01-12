@@ -2,6 +2,9 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum AppError {
+    #[error("Failed to load Pdfium library with error: {reason}")]
+    PdfLibrary { reason: String },
+
     #[error("Failed to load PDF '{path}': {reason}")]
     PdfLoad { path: String, reason: String },
 

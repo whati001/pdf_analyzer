@@ -9,6 +9,10 @@ use app::App;
 use eframe::egui;
 
 fn main() -> eframe::Result<()> {
+    // start pdfium worker
+    crate::pdf::service::PdfiumWorker::spawn()
+        .map_err(|err| eframe::Error::AppCreation(Box::new(err)))?;
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([900.0, 700.0])
@@ -100,11 +104,9 @@ impl eframe::App for App {
         });
 
         // Main content
-        egui::CentralPanel::default().show(ctx, |ui| {
-            match self.current_tab {
-                app::AppTab::PdfList => self.show_pdf_list_tab(ui, ctx),
-                app::AppTab::Results => self.show_results_tab(ui, ctx),
-            }
+        egui::CentralPanel::default().show(ctx, |ui| match self.current_tab {
+            app::AppTab::PdfList => self.show_pdf_list_tab(ui, ctx),
+            app::AppTab::Results => self.show_results_tab(ui, ctx),
         });
     }
 }
@@ -128,7 +130,8 @@ impl App {
 
             ui.add_space(16.0);
 
-            let can_analyze = !self.pdfs.is_empty() && matches!(self.state, app::AppState::Ready | app::AppState::Results);
+            let can_analyze = !self.pdfs.is_empty()
+                && matches!(self.state, app::AppState::Ready | app::AppState::Results);
             ui.add_enabled_ui(can_analyze, |ui| {
                 if ui.button("▶ Analyze").clicked() {
                     self.start_analysis();
@@ -163,7 +166,8 @@ impl App {
                         if let Some(ref thumbnail) = loaded_pdf.file.thumbnail {
                             let size = [thumbnail.width() as usize, thumbnail.height() as usize];
                             let pixels = thumbnail.as_flat_samples();
-                            let color_image = egui::ColorImage::from_rgba_unmultiplied(size, pixels.as_slice());
+                            let color_image =
+                                egui::ColorImage::from_rgba_unmultiplied(size, pixels.as_slice());
                             let texture = ctx.load_texture(
                                 format!("pdf_thumb_{}", idx),
                                 color_image,
@@ -300,7 +304,8 @@ impl App {
                                 ui.group(|ui| {
                                     ui.strong(name);
                                     for param in params {
-                                        config_changed |= self.render_config_param(ui, id, &param, true);
+                                        config_changed |=
+                                            self.render_config_param(ui, id, &param, true);
                                     }
                                 });
                             }
@@ -316,7 +321,8 @@ impl App {
                             ui.group(|ui| {
                                 ui.strong(name);
                                 for param in params {
-                                    config_changed |= self.render_config_param(ui, id, &param, false);
+                                    config_changed |=
+                                        self.render_config_param(ui, id, &param, false);
                                 }
                             });
                         }
@@ -383,7 +389,11 @@ impl App {
 
                     let mut value = current;
                     if ui
-                        .add(egui::DragValue::new(&mut value).speed(0.01).range(0.0..=1000.0))
+                        .add(
+                            egui::DragValue::new(&mut value)
+                                .speed(0.01)
+                                .range(0.0..=1000.0),
+                        )
                         .changed()
                     {
                         if is_analyzer {
