@@ -16,7 +16,8 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([900.0, 700.0])
-            .with_min_inner_size([600.0, 400.0]),
+            .with_min_inner_size([600.0, 400.0])
+            .with_drag_and_drop(true),
         ..Default::default()
     };
 
@@ -41,6 +42,19 @@ fn main() -> eframe::Result<()> {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Handle dropped files
+        ctx.input(|i| {
+            for file in &i.raw.dropped_files {
+                if let Some(path) = &file.path {
+                    if path.extension().map(|e| e == "pdf").unwrap_or(false) {
+                        if let Err(e) = self.add_pdf(path.clone()) {
+                            self.errors.push(e.to_string());
+                        }
+                    }
+                }
+            }
+        });
+
         self.update_analysis();
 
         if matches!(self.state, app::AppState::Analyzing) {
@@ -154,7 +168,7 @@ impl App {
             ui.vertical_centered(|ui| {
                 ui.add_space(50.0);
                 ui.label(egui::RichText::new("No PDF files added").size(16.0).weak());
-                ui.label("Click '+ Add PDFs' to select files");
+                ui.label("Click '+ Add PDFs' or drag and drop files here");
             });
         } else {
             egui::ScrollArea::vertical().show(ui, |ui| {
